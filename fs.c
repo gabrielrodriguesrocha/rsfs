@@ -34,8 +34,9 @@
 #define NCLUSTERSFAT 2 * FATSIZE / CLUSTERSIZE
 #define NCLUSTERSDIR 1
 
-#define FSTEP SECTORSIZE / sizeof(unsigned short)
-#define DSTEP SECTORSIZE / sizeof(dir_entry)
+#define NFORMATADO "Disco não formatado!\n"
+
+int formatado;
 
 unsigned short fat[65536];
 
@@ -48,23 +49,38 @@ typedef struct {
 
 dir_entry dir[128];
 
+void fs_update() {
+  int i;
+
+  /*  Escrita da FAT */
+  for (i = 0; i < NSECTORSFAT; i++)
+	bl_write(i, (char *) fat + i*SECTORSIZE); 
+  
+  /*  Escrita do diretório */
+  for (i = 0; i < NSECTORSDIR; i++)
+    bl_write(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE); 
+}
 
 int fs_init() {
   int i;
 
   /*  Leitura da FAT */
   for (i = 0; i < NSECTORSFAT; i++)
-	bl_read(i, (char *) fat + i*FSTEP);
+	bl_read(i, (char *) fat + i*SECTORSIZE);
   
   /*  Leitura do diretório */
   for (i = 0; i < NSECTORSDIR; i++)
-	bl_read(i + NSECTORSFAT, (char *) dir + i*DSTEP);
+	bl_read(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE);
 
   /*  Verificação de formatação */
   for (i = 0; i < NCLUSTERSFAT && (fat[i] == 3); i++); 
 
-  if (i != NCLUSTERSFAT || fat[NCLUSTERSFAT] != 4)
+  if (i != NCLUSTERSFAT || fat[NCLUSTERSFAT] != 4) {
 	printf("Disco não formatado!\n");
+	formatado = 0;
+  }
+  else
+  	formatado = 1;
 
   return 1;
 }
@@ -75,23 +91,20 @@ int fs_format() {
   for (i = 0; i < NCLUSTERSFAT; fat[i++] = 3);
   fat[NCLUSTERSFAT] = 4;
   for (i++; i < FATSIZE; fat[i++] = 1);
+
+  /*  Criação do Diretório */
   for (i = 0; i < 128; dir[i++].used = 0);
 
-  /*  Escrita da FAT */
-  for (i = 0; i < NSECTORSFAT; i++){
-	bl_write(i, (char *) (fat + i*FSTEP)); 
-  }
-  
-  /*  Escrita do diretório */
-  for (i = 0; i < NSECTORSDIR; i++)
-    bl_write(i + NSECTORSFAT, (char *) (dir + i*DSTEP)); 
+  fs_update();
 
+  formatado = 1;
 
-  return 0;
+  return 1;
 }
 
 int fs_free() {
   int i, fsize;
+
   for (i = 0, fsize = 0; i < 128; i++) {
 	if (dir[i].used) {
 		fsize = fsize + dir[i].size;
@@ -104,6 +117,9 @@ int fs_free() {
 int fs_list(char *buffer, int size) {
   int i, psize;
   char *p = buffer;
+  
+  if (!formatado && printf(NFORMATADO)) return 0;
+  
   for (i = 0, psize = 0; i < 128 && p != buffer + size; i++) {
 	if (dir[i].used) {
 	  psize = sprintf(p, "%s\t\t%d\n", dir[i].name, dir[i].size);
@@ -119,15 +135,22 @@ int fs_list(char *buffer, int size) {
 int fs_create(char* file_name) {
   int i, j;
 
+  if (!formatado && printf(NFORMATADO)) return 0;
+  
   for (i = 0; i < 128 && dir[i].used; i++) {
 	if (dir[i].used && !strcmp(dir[i].name, file_name)) {
-	  perror("Arquivo já existente.\n");
-	  return 0;
+	  printf("Arquivo já existente.\n");
+	  return -1;
 	}
   }
 
   if (i == 128) {
-	perror("Não é possível criar o arquivo.\n");
+	printf("Não há espaço no diretório.\n");
+	return 0;
+  }
+
+  if (strlen(file_name) > 25) {
+	printf("O nome excede o máximo.\n");
 	return 0;
   }
 
@@ -143,28 +166,24 @@ int fs_create(char* file_name) {
 	}
   }
 
-  /*  Escrita da FAT */
-  for (i = 0; i < NSECTORSFAT; i++)
-	bl_write(i, (char *) (fat + i*FSTEP)); 
-  
-  /*  Escrita do diretório */
-  for (i = 0; i < NSECTORSDIR; i++)
-    bl_write(i + NSECTORSFAT, (char *) (dir + i*DSTEP));
+  fs_update();
 
-  return 1;
+  return i;
 }
 
 int fs_remove(char *file_name) {
   int i,j,rem = -1;
 
+  if (!formatado && printf(NFORMATADO)) return 0;
+  
   for (i = 0; i < 128 && rem == -1; i++) {
 	if (dir[i].used && !strcmp(dir[i].name, file_name))
 	  rem = i;
   }
 
   if (i == 128) {
-	perror("Arquivo não existe.");
-	return 1;
+	printf("Arquivo não existe.");
+	return -1;
   }
 
   dir[rem].used = 0;
@@ -177,20 +196,47 @@ int fs_remove(char *file_name) {
   }
   fat[rem] = 1;
 
-  /*  Escrita da FAT */
-  for (i = 0; i < NSECTORSFAT; i++){
-	bl_write(i, (char *) (fat + i*FSTEP)); 
-  }
-  
-  /*  Escrita do diretório */
-  for (i = 0; i < NSECTORSDIR; i++)
-    bl_write(i + NSECTORSFAT, (char *) (dir + i*DSTEP));
 
-  return 0;
+  fs_update();
+
+  return i;
 }
 
 int fs_open(char *file_name, int mode) {
-  printf("Função não implementada: fs_open\n");
+  int i, rem;
+
+  if (mode == FS_R) {
+  	for (i = 0; i < 128; i++) {
+	  if (dir[i].used && !strcmp(dir[i].name, file_name))
+	    return i;
+  	}
+
+    printf("Arquivo não existe.");
+    return -1;
+  }
+  else if (mode == FS_W) {
+  	for (i = 0; i < 128; i++) {
+	  if (dir[i].used && !strcmp(dir[i].name, file_name))
+	    return i;
+  	}
+	
+	if (i == 128) {
+		return fs_create(file_name);
+	}
+	else {
+  	  while(fat[i] != 2) {
+	    rem = i;
+	    i = fat[i];
+	    fat[rem] = 1;
+      }
+      fat[rem] = 1;
+
+	  fs_update();
+
+	  return i;
+	}
+  }
+
   return -1;
 }
 
