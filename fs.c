@@ -53,24 +53,20 @@ void fs_update() {
   int i;
 
   /*  Escrita da FAT */
-  for (i = 0; i < NSECTORSFAT; i++)
-	bl_write(i, (char *) fat + i*SECTORSIZE); 
+  for (i = 0; i < NSECTORSFAT; bl_write(i, (char *) fat + i*SECTORSIZE), i++); 
   
   /*  Escrita do diretório */
-  for (i = 0; i < NSECTORSDIR; i++)
-    bl_write(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE); 
+  for (i = 0; i < NSECTORSDIR; bl_write(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE), i++); 
 }
 
 int fs_init() {
   int i;
 
   /*  Leitura da FAT */
-  for (i = 0; i < NSECTORSFAT; i++)
-	bl_read(i, (char *) fat + i*SECTORSIZE);
+  for (i = 0; i < NSECTORSFAT; bl_read(i, (char *) fat + i*SECTORSIZE), i++);
   
   /*  Leitura do diretório */
-  for (i = 0; i < NSECTORSDIR; i++)
-	bl_read(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE);
+  for (i = 0; i < NSECTORSDIR; bl_read(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE), i++);
 
   /*  Verificação de formatação */
   for (i = 0; i < NCLUSTERSFAT && (fat[i] == 3); i++); 
@@ -158,7 +154,7 @@ int fs_create(char* file_name) {
   strcpy(dir[i].name, file_name); 
   dir[i].size = 0;
   dir[i].first_block = 0;
-  
+
   for (j = NCLUSTERSFAT; j < FATSIZE && !dir[i].first_block; j++) {
 	if (fat[j] == 1) {
 		dir[i].first_block = j;
@@ -194,7 +190,7 @@ int fs_remove(char *file_name) {
 	j = fat[j];
 	fat[rem] = 1;
   }
-  fat[rem] = 1;
+  fat[j] = 1;
 
 
   fs_update();
