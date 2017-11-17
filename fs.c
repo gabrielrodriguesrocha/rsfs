@@ -28,6 +28,7 @@
 
 #define CLUSTERSIZE 4096
 #define FATSIZE 65536
+#define DIRSIZE 128
 
 #define NSECTORSFAT 2 * FATSIZE / SECTORSIZE
 #define NSECTORSDIR CLUSTERSIZE / SECTORSIZE
@@ -38,7 +39,7 @@
 
 int formatado;
 
-unsigned short fat[65536];
+unsigned short fat[FATSIZE];
 
 typedef struct {
        char used;
@@ -47,7 +48,15 @@ typedef struct {
        int size;
 } dir_entry;
 
-dir_entry dir[128];
+typedef struct {
+	char mode; 
+	unsigned short current_block;
+	unsigned short offset;
+} file;
+
+dir_entry dir[DIRSIZE];
+
+file fildes[DIRSIZE];
 
 void fs_update() {
   int i;
@@ -67,6 +76,9 @@ int fs_init() {
   
   /*  Leitura do diretório */
   for (i = 0; i < NSECTORSDIR; bl_read(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE), i++);
+
+  /*  Inicialização da tabela de FDs */
+  for (i = 0; i < DIRSIZE; fildes[i].current_block = 0, i++);
 
   /*  Verificação de formatação */
   for (i = 0; i < NCLUSTERSFAT && (fat[i] == 3); i++); 
@@ -178,7 +190,7 @@ int fs_remove(char *file_name) {
   }
 
   if (i == 128) {
-	printf("Arquivo não existe.");
+	printf("Arquivo não existe.\n");
 	return -1;
   }
 
@@ -199,55 +211,142 @@ int fs_remove(char *file_name) {
 }
 
 int fs_open(char *file_name, int mode) {
-  int i, rem;
+  int i, rem, fb;
 
+  for (i = 0; i < 128; i++) 
+	if (dir[i].used && !strcmp(dir[i].name, file_name)) 
+		break;
+ 
+  if (fildes[i].current_block) {
+	printf("Arquivo já aberto.\n");
+	return -1;
+  } 
+  
   if (mode == FS_R) {
-  	for (i = 0; i < 128; i++) {
-	  if (dir[i].used && !strcmp(dir[i].name, file_name))
-	    return i;
-  	}
-
-    printf("Arquivo não existe.");
-    return -1;
+	if (i == 128) {
+      printf("Arquivo não existe.\n");
+      return -1;
+	}
   }
   else if (mode == FS_W) {
-  	for (i = 0; i < 128; i++) {
-	  if (dir[i].used && !strcmp(dir[i].name, file_name))
-	    return i;
-  	}
-	
 	if (i == 128) {
 		return fs_create(file_name);
 	}
 	else {
+	  fb = dir[i].first_block;
+	  i = fb;
   	  while(fat[i] != 2) {
 	    rem = i;
 	    i = fat[i];
 	    fat[rem] = 1;
       }
-      fat[rem] = 1;
+      fat[i] = 1;
+	  fat[fb] = 2;
+	  i = fb;
 
 	  fs_update();
-
-	  return i;
 	}
   }
 
-  return -1;
+  fildes[i].offset = 0;
+  fildes[i].current_block = dir[i].first_block;
+  fildes[i].mode = mode;
+  printf("Primeiro bloco: %d\n", fildes[i].current_block);
+  return i;
 }
 
 int fs_close(int file)  {
-  printf("Função não implementada: fs_close\n");
-  return 0;
+ 
+  if (!fildes[file].current_block) {
+	printf("Arquivo não aberto.\n");
+	return -1;
+  }
+
+  fildes[file].current_block = 0;
+  return file; 
 }
 
 int fs_write(char *buffer, int size, int file) {
-  printf("Função não implementada: fs_write\n");
-  return -1;
+  char sector[SECTORSIZE];
+  unsigned long write_count, write_offset;
+  unsigned short i, cb;
+
+  if (!fildes[file].current_block) {
+    printf("Arquivo não aberto.\n");
+	return 0;
+  }
+
+  if (fs_free() < size) {
+	printf("Não há espaço suficiente no disco.\n");
+	return 0;
+  }
+
+  write_count = 0;
+  write_offset = 0;
+  cb = fildes[file].current_block; 
+
+  bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+
+  while (fildes[file].offset + size > SECTORSIZE) {
+	write_count += SECTORSIZE - fildes[file].offset;
+	size -= write_count;
+    strncpy(sector + fildes[file].offset, buffer + write_offset, write_count);
+	write_offset += write_count;
+	
+	for (i = 0; i < NCLUSTERSFAT && fat[i] != 1; i++);
+	fat[cb] = i;
+	fat[i] = 2;
+	cb = i;
+	
+	bl_write(cb * SECTORSIZE / CLUSTERSIZE, sector);
+	
+	fildes[file].current_block = i;
+    fildes[file].offset = (fildes[file].offset + write_count) % SECTORSIZE;
+    
+	bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+  }
+
+  write_count += size;
+  strncpy(sector + fildes[file].offset, buffer + write_offset, size);
+  fildes[file].offset = (fildes[file].offset + size) % SECTORSIZE;
+
+  return write_count;
 }
 
 int fs_read(char *buffer, int size, int file) {
-  printf("Função não implementada: fs_read\n");
-  return -1;
+  char sector[SECTORSIZE];
+  unsigned long read_count, read_offset;
+  unsigned short cb;
+
+  if (!fildes[file].current_block) {
+    printf("Arquivo não aberto.\n");
+	return 0;
+  }
+
+  read_count = 0;
+  read_offset = 0;
+  cb = fildes[file].current_block; 
+
+  bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+
+  while (size > SECTORSIZE && cb != 2) {
+	read_count += SECTORSIZE - fildes[file].offset;
+	size -= read_count;
+    strncpy(buffer + read_offset, sector + fildes[file].offset, read_count);
+	read_offset += read_count;
+	
+	cb = fat[cb];	
+	
+	fildes[file].current_block = cb;
+    fildes[file].offset = (fildes[file].offset + read_count) % SECTORSIZE;
+    
+	bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+  }
+
+  read_count += size;
+  strncpy(buffer + read_offset, sector + fildes[file].offset, read_count);
+  fildes[file].offset = (fildes[file].offset + size) % SECTORSIZE;
+
+  return read_count;
 }
 
