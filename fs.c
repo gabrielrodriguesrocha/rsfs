@@ -293,7 +293,7 @@ int fs_write(char *buffer, int size, int file) {
     strncpy(sector + fildes[file].offset, buffer + write_offset, write_count);
 	write_offset += write_count;
 	
-	for (i = 0; i < NCLUSTERSFAT && fat[i] != 1; i++);
+	for (i = NCLUSTERSFAT; i < FATSIZE && fat[i] != 1; i++);
 	fat[cb] = i;
 	fat[i] = 2;
 	cb = i;
