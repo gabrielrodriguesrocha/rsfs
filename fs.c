@@ -211,7 +211,7 @@ int fs_remove(char *file_name) {
 }
 
 int fs_open(char *file_name, int mode) {
-  int i, rem, fb;
+  int i, rem, fb, entry;
 
   for (i = 0; i < 128; i++) 
 	if (dir[i].used && !strcmp(dir[i].name, file_name)) 
@@ -227,12 +227,15 @@ int fs_open(char *file_name, int mode) {
       printf("Arquivo não existe.\n");
       return -1;
 	}
+	entry = i;
   }
   else if (mode == FS_W) {
 	if (i == 128) {
-		return fs_create(file_name);
+		entry = fs_create(file_name);
 	}
 	else {
+	  entry = i;
+	  dir[entry].size = 0;
 	  fb = dir[i].first_block;
 	  i = fb;
   	  while(fat[i] != 2) {
@@ -247,12 +250,16 @@ int fs_open(char *file_name, int mode) {
 	  fs_update();
 	}
   }
+  else {
+	printf("Erro ao abrir arquivo, modo não reconhecido.\n");
+	return -1;
+  }
 
-  fildes[i].offset = 0;
-  fildes[i].current_block = dir[i].first_block;
-  fildes[i].mode = mode;
-  printf("Primeiro bloco: %d\n", fildes[i].current_block);
-  return i;
+  fildes[entry].offset = 0;
+  fildes[entry].current_block = dir[entry].first_block;
+  fildes[entry].mode = mode;
+  printf("Primeiro bloco: %d\n", fildes[entry].current_block);
+  return entry;
 }
 
 int fs_close(int file)  {
@@ -269,13 +276,12 @@ int fs_close(int file)  {
 int fs_write(char *buffer, int size, int file) {
   char sector[SECTORSIZE];
   unsigned long write_count, write_offset;
-  unsigned short i, cb;
+  unsigned short i, cb, loops;
 
   if (!fildes[file].current_block) {
     printf("Arquivo não aberto.\n");
 	return 0;
   }
-
   if (fs_free() < size) {
 	printf("Não há espaço suficiente no disco.\n");
 	return 0;
@@ -283,32 +289,45 @@ int fs_write(char *buffer, int size, int file) {
 
   write_count = 0;
   write_offset = 0;
+  loops = 0;
   cb = fildes[file].current_block; 
 
-  bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+  bl_read(cb * CLUSTERSIZE / SECTORSIZE, sector);
 
   while (fildes[file].offset + size > SECTORSIZE) {
 	write_count += SECTORSIZE - fildes[file].offset;
 	size -= write_count;
     strncpy(sector + fildes[file].offset, buffer + write_offset, write_count);
 	write_offset += write_count;
+
+	if (!(loops % CLUSTERSIZE / SECTORSIZE)) {
+		for (i = NCLUSTERSFAT; fat[i] != 1; i++);
+
+		fat[cb] = i;
+		fat[i] = 2;
+		cb = i;
+		loops = 0;
+	}
+	else {
+		loops = (loops + 1) % CLUSTERSIZE / SECTORSIZE;
+	}
 	
-	for (i = NCLUSTERSFAT; i < FATSIZE && fat[i] != 1; i++);
-	fat[cb] = i;
-	fat[i] = 2;
-	cb = i;
-	
-	bl_write(cb * SECTORSIZE / CLUSTERSIZE, sector);
+	bl_write(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
 	
 	fildes[file].current_block = i;
     fildes[file].offset = (fildes[file].offset + write_count) % SECTORSIZE;
     
-	bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
   }
 
   write_count += size;
   strncpy(sector + fildes[file].offset, buffer + write_offset, size);
   fildes[file].offset = (fildes[file].offset + size) % SECTORSIZE;
+  bl_write(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
+  printf("%s\n%d", sector, cb * SECTORSIZE / CLUSTERSIZE + loops);
+  dir[file].size += write_count;
+
+  fs_update();
 
   return write_count;
 }
@@ -316,7 +335,7 @@ int fs_write(char *buffer, int size, int file) {
 int fs_read(char *buffer, int size, int file) {
   char sector[SECTORSIZE];
   unsigned long read_count, read_offset;
-  unsigned short cb;
+  unsigned short cb, loops;
 
   if (!fildes[file].current_block) {
     printf("Arquivo não aberto.\n");
@@ -325,27 +344,32 @@ int fs_read(char *buffer, int size, int file) {
 
   read_count = 0;
   read_offset = 0;
+  loops = 0;
   cb = fildes[file].current_block; 
 
-  bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+  bl_read(cb * CLUSTERSIZE / SECTORSIZE, sector);
 
   while (size > SECTORSIZE && cb != 2) {
 	read_count += SECTORSIZE - fildes[file].offset;
 	size -= read_count;
     strncpy(buffer + read_offset, sector + fildes[file].offset, read_count);
 	read_offset += read_count;
-	
-	cb = fat[cb];	
-	
-	fildes[file].current_block = cb;
-    fildes[file].offset = (fildes[file].offset + read_count) % SECTORSIZE;
+	if (!(loops % CLUSTERSIZE / SECTORSIZE)) {
+		cb = fat[cb];
+		loops = 0;
+	}
+	else {
+		loops = (loops + 1) % CLUSTERSIZE / SECTORSIZE;
+	}
     
-	bl_read(cb * SECTORSIZE / CLUSTERSIZE, sector);
+	bl_read(cb * CLUSTERSIZE / SECTORSIZE, sector);
   }
 
   read_count += size;
   strncpy(buffer + read_offset, sector + fildes[file].offset, read_count);
   fildes[file].offset = (fildes[file].offset + size) % SECTORSIZE;
+
+  fs_update();
 
   return read_count;
 }
