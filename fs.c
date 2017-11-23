@@ -355,31 +355,53 @@ int fs_read(char *buffer, int size, int file) {
 
   read_count = 0;
   read_offset = 0;
-  loops = 0;
+  loops = fildes[file].offset / SECTORSIZE;
   cb = fildes[file].current_block; 
 
-  bl_read(cb * CLUSTERSIZE / SECTORSIZE, sector);
+  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
 
-  while (size > SECTORSIZE && cb != 2) {
-	read_count += SECTORSIZE - fildes[file].offset;
-	size -= read_count;
-    strncpy(buffer + read_offset, sector + fildes[file].offset, read_count);
-	read_offset += read_count;
-	if (!(loops % CLUSTERSIZE / SECTORSIZE)) {
+  while ((fildes[file].offset % SECTORSIZE) + size > SECTORSIZE) {
+	if (fildes[file].offset < CLUSTERSIZE) {
+		read_count += fat[cb] == 2 ? 
+					  dir[file].size % CLUSTERSIZE :
+					  SECTORSIZE - (fildes[file].offset % SECTORSIZE);
+		size -= read_count;
+    	strncpy(buffer + read_offset, sector + (fildes[file].offset % SECTORSIZE), read_count);
+		read_offset += read_count;
+	}
+	
+	loops = (loops + 1);
+	
+	if (!(loops % (CLUSTERSIZE / SECTORSIZE))) {
 		cb = fat[cb];
 		loops = 0;
 	}
-	else {
-		loops = (loops + 1) % CLUSTERSIZE / SECTORSIZE;
-	}
+
+	printf("Inside while\n");
+    printf("Texto: %s\nSetor: %d\nOffset: %d\n ", buffer, cb * CLUSTERSIZE / SECTORSIZE + loops, fildes[file].offset);
+
+	fildes[file].offset = (fildes[file].offset + read_count) % CLUSTERSIZE;
     
 	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
   }
 
-  read_count += size;
-  strncpy(buffer + read_offset, sector + fildes[file].offset, read_count);
-  fildes[file].offset = (fildes[file].offset + size) % SECTORSIZE;
+    if (fat[cb] == 2) {
+		if (fildes[file].offset == dir[file].size % CLUSTERSIZE)
+			return 0;
+		read_count += dir[file].size % CLUSTERSIZE > size ?
+					  size :
+					  dir[file].size % CLUSTERSIZE;
+  		strncpy(buffer + read_offset, sector + (fildes[file].offset % SECTORSIZE), read_count - read_offset);
+  		fildes[file].offset = (fildes[file].offset + read_count - read_offset) % CLUSTERSIZE;
+	}
+	else {
+		read_count += size;
+  		strncpy(buffer + read_offset, sector + (fildes[file].offset % SECTORSIZE), read_count);
+  	fildes[file].offset = (fildes[file].offset + size) % CLUSTERSIZE;
+	}
 
-  return read_count;
+    printf("Texto: %s\nSetor: %d\nOffset: %d\n ", buffer, cb * CLUSTERSIZE / SECTORSIZE + loops, fildes[file].offset);
+  
+	return read_count;
 }
 
