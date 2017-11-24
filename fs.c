@@ -258,7 +258,9 @@ int fs_open(char *file_name, int mode) {
   fildes[entry].offset = 0;
   fildes[entry].current_block = dir[entry].first_block;
   fildes[entry].mode = mode;
+  #ifdef DEBUG
   printf("Primeiro bloco: %d\n", fildes[entry].current_block);
+  #endif
   return entry;
 }
 
@@ -286,8 +288,14 @@ int fs_write(char *buffer, int size, int file) {
 	printf("Não há espaço suficiente no disco.\n");
 	return 0;
   }
+  if (fildes[file].mode != FS_W) {
+	printf("Arquivo não aberto para leitura.\n");
+	return 0;
+  }
 
+  #ifdef DEBUG
   printf("Escrita\n");
+  #endif
 
   write_count = 0;
   write_offset = 0;
@@ -318,8 +326,10 @@ int fs_write(char *buffer, int size, int file) {
 		loops = 0;
 		fildes[file].current_block = cb;
 	}
+    #ifdef DEBUG
 	printf("Inside while\n");	
     printf("Texto: %s\nSetor: %d\n", sector, cb * CLUSTERSIZE / SECTORSIZE + loops);
+    #endif
 	
     fildes[file].offset = (fildes[file].offset + write_count) % CLUSTERSIZE;
    
@@ -332,13 +342,17 @@ int fs_write(char *buffer, int size, int file) {
   strncpy(sector + (fildes[file].offset % SECTORSIZE), buffer + write_offset, size);
   bl_write(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
   
+  #ifdef DEBUG
   printf("Texto: %s\nSetor: %d\n", sector, cb * CLUSTERSIZE / SECTORSIZE + loops);
+  #endif
  
   /*  Atualização do arquivo */ 
   fildes[file].offset = (fildes[file].offset + size) % CLUSTERSIZE;
   dir[file].size += write_count;
   
+  #ifdef DEBUG
   printf("Tamanho: %d\n", dir[file].size);
+  #endif
 
   fs_update();
 
@@ -354,8 +368,14 @@ int fs_read(char *buffer, int size, int file) {
     printf("Arquivo não aberto.\n");
 	return 0;
   }
+  if (fildes[file].mode != FS_R) {
+	printf("Arquivo não aberto para escrita.\n");
+	return 0;
+  }
 
+  #ifdef DEBUG
   printf("Leitura\n");
+  #endif
 
 
   read_count = 0;
@@ -363,13 +383,13 @@ int fs_read(char *buffer, int size, int file) {
   loops = fildes[file].offset / SECTORSIZE;
   cb = fildes[file].current_block; 
   
-  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
+  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector); /*  Leitura inicial */
 
-  while ((fildes[file].offset % SECTORSIZE) + size > SECTORSIZE) {
+  while ((fildes[file].offset % SECTORSIZE) + size > SECTORSIZE) { /*  A leitura começa e termina em blocos diferentes */
 	if (fildes[file].offset < CLUSTERSIZE) {
-		read_count += fat[cb] == 2 ? 
-					  dir[file].size % CLUSTERSIZE - (fildes[file].offset % SECTORSIZE):
-					  SECTORSIZE - (fildes[file].offset % SECTORSIZE);
+		read_count += fat[cb] == 2 ? /*  É o último bloco? */
+					  dir[file].size % CLUSTERSIZE - (fildes[file].offset % SECTORSIZE): /*  Sim, subtraia do tamanho do arquivo */
+					  SECTORSIZE - (fildes[file].offset % SECTORSIZE); /*  Não, subtraia do tamanho do bloco */
 		size -= read_count;
     	strncpy(buffer + read_offset, sector + (fildes[file].offset % SECTORSIZE), read_count);
 		read_offset += read_count;
@@ -377,37 +397,41 @@ int fs_read(char *buffer, int size, int file) {
 	
 	loops = (loops + 1);
 	
-	if (!(loops % (CLUSTERSIZE / SECTORSIZE))) {
+	if (!(loops % (CLUSTERSIZE / SECTORSIZE))) { /*  Todos os setores do agrupamento foram lidos */
 		cb = fat[cb];
 		loops = 0;
 		fildes[file].current_block = cb;
 	}
 
+    #ifdef DEBUG
 	printf("Inside while\n");
     printf("Texto: %s\nSetor: %d\nOffset: %d\n ", buffer, cb * CLUSTERSIZE / SECTORSIZE + loops, fildes[file].offset);
+    #endif
 
 	fildes[file].offset = (fildes[file].offset + read_count) % CLUSTERSIZE;
     
 	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
   }
 
-  if((fildes[file].offset % SECTORSIZE) == (dir[file].size % CLUSTERSIZE) && fat[cb] == 2)
+  if((fildes[file].offset % SECTORSIZE) == (dir[file].size % CLUSTERSIZE) && fat[cb] == 2) /*  Final do arquivo */
     return 0;
   
-  if (fat[cb] == 2) {
-	read_count += dir[file].size % CLUSTERSIZE > size ?
+  if (fat[cb] == 2) { /*  Tratamento especial para o último bloco */
+	read_count += dir[file].size % CLUSTERSIZE > size ? /* É possível ler o tamanho requisitado?  */
 				  size :
 				  dir[file].size % CLUSTERSIZE - (fildes[file].offset % SECTORSIZE);
  	strncpy(buffer + read_offset, sector + (fildes[file].offset % SECTORSIZE), read_count - read_offset);
     fildes[file].offset = (fildes[file].offset + read_count - read_offset) % CLUSTERSIZE;
   }
-  else {
+  else { /*  Leitura de outros blocos */
     read_count += size;
     strncpy(buffer + read_offset, sector + (fildes[file].offset % SECTORSIZE), size);
     fildes[file].offset = (fildes[file].offset + size) % CLUSTERSIZE;
   }
 
+  #ifdef DEBUG
   printf("Texto: %s\nSetor: %d\nOffset: %d\n ", buffer, cb * CLUSTERSIZE / SECTORSIZE + loops, fildes[file].offset);
+  #endif
   
   return read_count;
 }
