@@ -58,7 +58,7 @@ dir_entry dir[DIRSIZE];
 
 file fildes[DIRSIZE];
 
-char tmp_buffer[CLUSTERSIZE];
+char buffer_r[CLUSTERSIZE], buffer_w[CLUSTERSIZE];
 
 void fs_update() {
   int i;
@@ -79,7 +79,13 @@ void buffer_copy (char * from, char * to, int size) {
 void flush_to_disk (unsigned short block, char * buffer) {
   int i;
   for (i = 0; i < CLUSTERSIZE / SECTORSIZE; i++)
-    bl_write(block * CLUSTERSIZE / SECTORSIZE + i, buffer);
+    bl_write(block * CLUSTERSIZE / SECTORSIZE + i, buffer + i * SECTORSIZE);
+}
+
+void cluster_from_disk (unsigned short block, char * buffer) {
+  int i;
+  for (i = 0; i < CLUSTERSIZE / SECTORSIZE; i++)
+    bl_read(block * CLUSTERSIZE / SECTORSIZE + i, buffer + i * SECTORSIZE);
 }
 
 int fs_init() {
@@ -286,7 +292,7 @@ int fs_close(int file)  {
   }
 
   if (fildes[file].mode == FS_W && fildes[file].offset)
-    flush_to_disk(fildes[file].current_block, tmp_buffer);
+    flush_to_disk(fildes[file].current_block, buffer_w);
 
   fildes[file].current_block = 0;
   return file; 
@@ -294,7 +300,11 @@ int fs_close(int file)  {
 
 int fs_write(char *buffer, int size, int file) {
   unsigned long write_count, write_offset;
-  unsigned short i, cb, loops;
+  unsigned short i, cb;
+
+  #ifdef DEBUG
+  printf("Bloco atual: %d\n", fildes[file].current_block);
+  #endif
 
   if (!fildes[file].current_block) {
     printf("Arquivo não aberto.\n");
@@ -311,53 +321,57 @@ int fs_write(char *buffer, int size, int file) {
 
   write_count = 0;
   write_offset = 0;
-  loops = fildes[file].offset / SECTORSIZE;
   cb = fildes[file].current_block;
 
-  while ((fildes[file].offset % SECTORSIZE) + size > SECTORSIZE) { /*  A escrita começa e termina em blocos diferentes */
+  while (fildes[file].offset + size > CLUSTERSIZE) { /*  A escrita começa e termina em blocos diferentes */
 	if (fildes[file].offset < CLUSTERSIZE) {
 		write_count += SECTORSIZE - (fildes[file].offset % SECTORSIZE);
 		size -= write_count;
-    	buffer_copy(tmp_buffer + fildes[file].offset, buffer + write_offset, write_count);
+    	buffer_copy(buffer_w + fildes[file].offset, buffer + write_offset, write_count);
 		write_offset += write_count;
-		}
+	}
+    
+	fildes[file].offset = (fildes[file].offset + write_count) % CLUSTERSIZE;
 	
-	flush_to_disk(cb, tmp_buffer);
-	
-	loops = (loops + 1);
-
-	if (!(loops % (CLUSTERSIZE / SECTORSIZE))) { /*  Todos os setores do agrupamento estão usados */
+	if (!fildes[file].offset) { /*  Todos os setores do agrupamento estão usados */
 		for (i = NCLUSTERSFAT; fat[i] != 1; i++);
 
+		flush_to_disk(cb, buffer_w);
 		fat[cb] = i;
 		fat[i] = 2;
 		cb = i;
-		loops = 0;
 		fildes[file].current_block = cb;
 	}
     #ifdef DEBUG
 	printf("Inside while\n");	
-    printf("Texto: %s\nSetor: %d\n", tmp_buffer, cb * CLUSTERSIZE / SECTORSIZE + loops);
+    printf("Texto: %s\nCluster: %d\n", buffer_w, cb);
     #endif
 	
-    fildes[file].offset = (fildes[file].offset + write_count) % CLUSTERSIZE;
-   
-    bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, tmp_buffer + loops * SECTORSIZE);
   }
 
   /*  Escrita no setor corrente */
   write_count += size;
-  buffer_copy(tmp_buffer + fildes[file].offset, buffer + write_offset, size);
+  buffer_copy(buffer_w + fildes[file].offset, buffer + write_offset, size);
 /*   bl_write(cb * CLUSTERSIZE / SECTORSIZE + loops, sector_w.content); 
  */
   
   #ifdef DEBUG
-  printf("Texto: %s\nSetor: %d\n", tmp_buffer, cb * CLUSTERSIZE / SECTORSIZE + loops);
+  printf("Texto: %s\nCluster: %d\n", buffer_w, cb);
   #endif
  
   /*  Atualização do arquivo */ 
   fildes[file].offset = (fildes[file].offset + size) % CLUSTERSIZE;
   dir[file].size += write_count;
+
+  if (!fildes[file].offset) {
+	for (i = NCLUSTERSFAT; fat[i] != 1; i++);
+	
+	flush_to_disk(cb, buffer_w);
+	fat[cb] = i;
+	fat[i] = 2;
+	cb = i;
+	fildes[file].current_block = cb;
+  }
  
   #ifdef DEBUG 
   printf("Tamanho: %d\n", dir[file].size);
@@ -369,9 +383,8 @@ int fs_write(char *buffer, int size, int file) {
 }
 
 int fs_read(char *buffer, int size, int file) {
-  char sector[SECTORSIZE];
   unsigned long read_count, read_offset;
-  unsigned short cb, loops;
+  unsigned short cb;
 
   if (!fildes[file].current_block) {
     printf("Arquivo não aberto.\n");
@@ -385,64 +398,61 @@ int fs_read(char *buffer, int size, int file) {
 
   read_count = 0;
   read_offset = 0;
-  loops = fildes[file].offset / SECTORSIZE;
   cb = fildes[file].current_block; 
   
-  /*if(!sector_r.dirty) {
-	  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
-	  sector_r.dirty = 1;
-  }*/
+  if (!fildes[file].offset) {
+    cluster_from_disk(cb, buffer_r);	
+  }
 
-
-  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, tmp_buffer);
-
-  while ((fildes[file].offset % SECTORSIZE) + size > SECTORSIZE) {
+  while (fildes[file].offset + size > CLUSTERSIZE) {
 	if (fildes[file].offset < CLUSTERSIZE) {
 		read_count += fat[cb] == 2 ? 
-					  dir[file].size % CLUSTERSIZE - (fildes[file].offset % SECTORSIZE):
+					  dir[file].size % CLUSTERSIZE - fildes[file].offset:
 					  SECTORSIZE - (fildes[file].offset % SECTORSIZE);
 		size -= read_count;
-    	buffer_copy(buffer + read_offset, tmp_buffer + fildes[file].offset, read_count);
+    	buffer_copy(buffer + read_offset, buffer_r + fildes[file].offset, read_count);
 		read_offset += read_count;
 	}
 	
-	loops = (loops + 1);
-	
-	if (!(loops % (CLUSTERSIZE / SECTORSIZE))) {
+	fildes[file].offset = (fildes[file].offset + read_count) % CLUSTERSIZE;
+
+	if (!fildes[file].offset){
 		cb = fat[cb];
-		loops = 0;
 		fildes[file].current_block = cb;
+		cluster_from_disk(cb, buffer_r);
 	}
     
     #ifdef DEBUG
 	printf("Inside while\n");
-    printf("Texto: %s\nSetor: %d\nOffset: %d\n ", buffer, cb * CLUSTERSIZE / SECTORSIZE + loops, fildes[file].offset);
+    printf("Texto: %s\nCluster: %d\nOffset: %d\n ", buffer, cb, fildes[file].offset);
     #endif
 
-	fildes[file].offset = (fildes[file].offset + read_count) % CLUSTERSIZE;
-    
-	
-	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, tmp_buffer);
   }
 
-  if((fildes[file].offset % SECTORSIZE) == (dir[file].size % CLUSTERSIZE) && fat[cb] == 2)
+  if(fildes[file].offset == (dir[file].size % CLUSTERSIZE) && fat[cb] == 2)
     return 0;
   
   if (fat[cb] == 2) {
-	read_count += dir[file].size % CLUSTERSIZE > size ?
+	read_count += dir[file].size % CLUSTERSIZE > size + fildes[file].offset ?
 				  size :
-				  dir[file].size % CLUSTERSIZE - (fildes[file].offset % SECTORSIZE);
- 	buffer_copy(buffer + read_offset, tmp_buffer + fildes[file].offset, read_count - read_offset);
+				  dir[file].size % CLUSTERSIZE - fildes[file].offset;
+ 	buffer_copy(buffer + read_offset, buffer_r + fildes[file].offset, read_count - read_offset);
     fildes[file].offset = (fildes[file].offset + read_count - read_offset) % CLUSTERSIZE;
   }
   else {
     read_count += size;
-    buffer_copy(buffer + read_offset, tmp_buffer + fildes[file].offset, size);
+    buffer_copy(buffer + read_offset, buffer_r + fildes[file].offset, size);
     fildes[file].offset = (fildes[file].offset + size) % CLUSTERSIZE;
+  }
+	
+  if (!fildes[file].offset){
+	cb = fat[cb];
+	fildes[file].current_block = cb;
+	cluster_from_disk(cb, buffer_r);
   }
 
   #ifdef DEBUG
-  printf("Texto: %s\nSetor: %d\nOffset: %d\n ", buffer, cb * CLUSTERSIZE / SECTORSIZE + loops, fildes[file].offset);
+  printf("Texto: %s\nCluster: %d\nOffset: %d\n ", buffer, cb, fildes[file].offset);
   #endif
 
   return read_count;
