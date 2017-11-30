@@ -63,7 +63,11 @@ dir_entry dir[DIRSIZE];
 
 file fildes[DIRSIZE];
 
+<<<<<<< HEAD
 sector_buffer sector_r, sector_w;
+=======
+char tmp_buffer[CLUSTERSIZE];
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
 
 void fs_update() {
   int i;
@@ -73,6 +77,18 @@ void fs_update() {
   
   /*  Escrita do diretório */
   for (i = 0; i < NSECTORSDIR; bl_write(i + NSECTORSFAT, (char *) dir + i*SECTORSIZE), i++); 
+}
+
+void buffer_copy (char * from, char * to, int size) {
+  int i;
+  for (i = 0; i < size; i++)
+    from[i] = to[i];
+}
+
+void flush_to_disk (unsigned short block, char * buffer) {
+  int i;
+  for (i = 0; i < CLUSTERSIZE / SECTORSIZE; i++)
+    bl_write(block * CLUSTERSIZE / SECTORSIZE + i, buffer);
 }
 
 int fs_init() {
@@ -280,12 +296,14 @@ int fs_close(int file)  {
 	return -1;
   }
 
+  if (fildes[file].mode == FS_W && fildes[file].offset)
+    flush_to_disk(fildes[file].current_block, tmp_buffer);
+
   fildes[file].current_block = 0;
   return file; 
 }
 
 int fs_write(char *buffer, int size, int file) {
-  char sector[SECTORSIZE];
   unsigned long write_count, write_offset;
   unsigned short i, cb, loops;
 
@@ -306,21 +324,32 @@ int fs_write(char *buffer, int size, int file) {
   write_offset = 0;
   loops = fildes[file].offset / SECTORSIZE;
   cb = fildes[file].current_block;
+<<<<<<< HEAD
 
   if (!sector_w.dirty) {
   	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector_w.content); /*  Leitura inicial */
 	sector_w.dirty = 1;
   }
+=======
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
 
   while ((fildes[file].offset % SECTORSIZE) + size > SECTORSIZE) { /*  A escrita começa e termina em blocos diferentes */
 	if (fildes[file].offset < CLUSTERSIZE) {
 		write_count += SECTORSIZE - (fildes[file].offset % SECTORSIZE);
 		size -= write_count;
+<<<<<<< HEAD
     	strncpy(sector_w.content + (fildes[file].offset % SECTORSIZE), buffer + write_offset, write_count);
 		write_offset += write_count;
 		}
 	
 	bl_write(cb * CLUSTERSIZE / SECTORSIZE + loops, sector_w.content);
+=======
+    	buffer_copy(tmp_buffer + fildes[file].offset, buffer + write_offset, write_count);
+		write_offset += write_count;
+		}
+	
+	flush_to_disk(cb, tmp_buffer);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
 	
 	loops = (loops + 1);
 
@@ -335,22 +364,38 @@ int fs_write(char *buffer, int size, int file) {
 	}
     #ifdef DEBUG
 	printf("Inside while\n");	
+<<<<<<< HEAD
     printf("Texto: %s\nSetor: %d\n", sector_w.content, cb * CLUSTERSIZE / SECTORSIZE + loops);
+=======
+    printf("Texto: %s\nSetor: %d\n", tmp_buffer, cb * CLUSTERSIZE / SECTORSIZE + loops);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
     #endif
 	
     fildes[file].offset = (fildes[file].offset + write_count) % CLUSTERSIZE;
    
+<<<<<<< HEAD
 	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector_w.content);
+=======
+    bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, tmp_buffer + loops * SECTORSIZE);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
   }
 
   /*  Escrita no setor corrente */
   write_count += size;
+<<<<<<< HEAD
   strncpy(sector_w.content + (fildes[file].offset % SECTORSIZE), buffer + write_offset, size);
+=======
+  buffer_copy(tmp_buffer + fildes[file].offset, buffer + write_offset, size);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
 /*   bl_write(cb * CLUSTERSIZE / SECTORSIZE + loops, sector_w.content); 
  */
   
   #ifdef DEBUG
+<<<<<<< HEAD
   printf("Texto: %s\nSetor: %d\n", sector_w.content, cb * CLUSTERSIZE / SECTORSIZE + loops);
+=======
+  printf("Texto: %s\nSetor: %d\n", tmp_buffer, cb * CLUSTERSIZE / SECTORSIZE + loops);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
   #endif
  
   /*  Atualização do arquivo */ 
@@ -386,10 +431,20 @@ int fs_read(char *buffer, int size, int file) {
   loops = fildes[file].offset / SECTORSIZE;
   cb = fildes[file].current_block; 
   
+<<<<<<< HEAD
   if(!sector_r.dirty) {
 	  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
 	  sector_r.dirty = 1;
   }
+=======
+  /*if(!sector_r.dirty) {
+	  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector);
+	  sector_r.dirty = 1;
+  }*/
+
+
+  bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, tmp_buffer);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
 
   while ((fildes[file].offset % SECTORSIZE) + size > SECTORSIZE) {
 	if (fildes[file].offset < CLUSTERSIZE) {
@@ -397,7 +452,11 @@ int fs_read(char *buffer, int size, int file) {
 					  dir[file].size % CLUSTERSIZE - (fildes[file].offset % SECTORSIZE):
 					  SECTORSIZE - (fildes[file].offset % SECTORSIZE);
 		size -= read_count;
+<<<<<<< HEAD
     	strncpy(buffer + read_offset, sector_r.content + (fildes[file].offset % SECTORSIZE), read_count);
+=======
+    	buffer_copy(buffer + read_offset, tmp_buffer + fildes[file].offset, read_count);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
 		read_offset += read_count;
 	}
 	
@@ -416,7 +475,12 @@ int fs_read(char *buffer, int size, int file) {
 
 	fildes[file].offset = (fildes[file].offset + read_count) % CLUSTERSIZE;
     
+<<<<<<< HEAD
 	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, sector_r.content);
+=======
+	
+	bl_read(cb * CLUSTERSIZE / SECTORSIZE + loops, tmp_buffer);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
   }
 
   if((fildes[file].offset % SECTORSIZE) == (dir[file].size % CLUSTERSIZE) && fat[cb] == 2)
@@ -426,12 +490,20 @@ int fs_read(char *buffer, int size, int file) {
 	read_count += dir[file].size % CLUSTERSIZE > size ?
 				  size :
 				  dir[file].size % CLUSTERSIZE - (fildes[file].offset % SECTORSIZE);
+<<<<<<< HEAD
  	strncpy(buffer + read_offset, sector_r.content + (fildes[file].offset % SECTORSIZE), read_count - read_offset);
+=======
+ 	buffer_copy(buffer + read_offset, tmp_buffer + fildes[file].offset, read_count - read_offset);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
     fildes[file].offset = (fildes[file].offset + read_count - read_offset) % CLUSTERSIZE;
   }
   else {
     read_count += size;
+<<<<<<< HEAD
     strncpy(buffer + read_offset, sector_r.content + (fildes[file].offset % SECTORSIZE), size);
+=======
+    buffer_copy(buffer + read_offset, tmp_buffer + fildes[file].offset, size);
+>>>>>>> 45303dfef1c3e3fc2f26280ef95462cbb20a2c68
     fildes[file].offset = (fildes[file].offset + size) % CLUSTERSIZE;
   }
 
