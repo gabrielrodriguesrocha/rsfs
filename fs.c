@@ -291,9 +291,11 @@ int fs_close(int file)  {
 	return -1;
   }
 
-  if (fildes[file].mode == FS_W && fildes[file].offset) {
-    flush_to_disk(fildes[file].current_block, buffer_w);
-	fs_update();
+  if (fildes[file].mode == FS_W) {
+    if (fildes[file].offset) /*  Ainda há coisas para serem escritas */
+      flush_to_disk(fildes[file].current_block, buffer_w);
+	
+    fs_update();
   }
 
   fildes[file].current_block = 0;
@@ -343,20 +345,26 @@ int fs_write(char *buffer, int size, int file) {
 		fat[i] = 2;
 		cb = i;
 		fildes[file].current_block = cb;
-		fs_update();
 	}
     #ifdef DEBUG
 	printf("Inside while\n");	
     printf("Texto: %s\nCluster: %d\n", buffer_w, cb);
     #endif
 	
+    if (fs_free() < size) {
+	  printf("Não há espaço suficiente no disco.\n");
+	  return write_count;
+    }
   }
 
+  if (fs_free() < size) {
+	printf("Não há espaço suficiente no disco.\n");
+	return write_count;
+  }
+  
   /*  Escrita no setor corrente */
   write_count += size;
   buffer_copy(buffer_w + fildes[file].offset, buffer + write_offset, size);
-/*   bl_write(cb * CLUSTERSIZE / SECTORSIZE + loops, sector_w.content); 
- */
   
   #ifdef DEBUG
   printf("Texto: %s\nCluster: %d\n", buffer_w, cb);
@@ -374,7 +382,6 @@ int fs_write(char *buffer, int size, int file) {
 	fat[i] = 2;
 	cb = i;
 	fildes[file].current_block = cb;
-	fs_update();
   }
  
   #ifdef DEBUG 
