@@ -291,8 +291,10 @@ int fs_close(int file)  {
 	return -1;
   }
 
-  if (fildes[file].mode == FS_W && fildes[file].offset)
+  if (fildes[file].mode == FS_W && fildes[file].offset) {
     flush_to_disk(fildes[file].current_block, buffer_w);
+	fs_update();
+  }
 
   fildes[file].current_block = 0;
   return file; 
@@ -341,6 +343,7 @@ int fs_write(char *buffer, int size, int file) {
 		fat[i] = 2;
 		cb = i;
 		fildes[file].current_block = cb;
+		fs_update();
 	}
     #ifdef DEBUG
 	printf("Inside while\n");	
@@ -371,13 +374,12 @@ int fs_write(char *buffer, int size, int file) {
 	fat[i] = 2;
 	cb = i;
 	fildes[file].current_block = cb;
+	fs_update();
   }
  
   #ifdef DEBUG 
   printf("Tamanho: %d\n", dir[file].size);
   #endif
-
-  fs_update();
 
   return write_count;
 }
@@ -403,6 +405,7 @@ int fs_read(char *buffer, int size, int file) {
   if (!fildes[file].offset) {
     cluster_from_disk(cb, buffer_r);	
   }
+  
 
   while (fildes[file].offset + size > CLUSTERSIZE) {
 	if (fildes[file].offset < CLUSTERSIZE) {
@@ -428,9 +431,9 @@ int fs_read(char *buffer, int size, int file) {
     #endif
 
   }
-
+  
   if(fildes[file].offset == (dir[file].size % CLUSTERSIZE) && fat[cb] == 2)
-    return 0;
+    return read_count;
   
   if (fat[cb] == 2) {
 	read_count += dir[file].size % CLUSTERSIZE > size + fildes[file].offset ?
